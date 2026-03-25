@@ -1,0 +1,32 @@
+# .npmrc - Client-side npm configuration
+#
+# Install location:
+#   Global:      ~/.npmrc
+#   Per-project: <project-root>/.npmrc
+#
+# This configuration routes all public npm requests through Verdaccio
+# (caching proxy) and private @myorg-scoped packages through GitLab.
+#
+# Prerequisites:
+#   - Verdaccio running at verdaccio.internal:4873
+#   - GITLAB_NPM_TOKEN environment variable set (project or personal access token)
+#
+# Reference: https://docs.npmjs.com/cli/v10/configuring-npm/npmrc
+
+# Public packages: route through Verdaccio (caches upstream npmjs.org)
+registry=http://verdaccio.internal:4873/
+
+# Private packages: route @myorg scope to GitLab npm Registry
+# Replace <GROUP_ID> with your GitLab group ID.
+@myorg:registry=https://gitlab.example.com/api/v4/groups/<GROUP_ID>/-/packages/npm/
+
+# Authentication for GitLab npm Registry
+# Use an environment variable for the token (never commit tokens)
+//gitlab.example.com/api/v4/groups/<GROUP_ID>/-/packages/npm/:_authToken=${GITLAB_NPM_TOKEN}
+
+# Disable sending telemetry to npm
+fund=false
+audit=true
+
+# Use exact versions when installing (avoid floating ranges)
+save-exact=true

@@ -1,0 +1,61 @@
+# sync-npm-packages.gitlab-ci.yml
+#
+# Scheduled pipeline to download approved npm packages and publish them
+# to the GitLab npm Registry. Use alongside Verdaccio for caching.
+#
+# Setup:
+#   1. Add to a dedicated "registry-sync" project.
+#   2. Create a pipeline schedule (Build > Pipeline schedules).
+#   3. Maintain the approved package list in config/approved-npm-packages.txt.
+#   4. Set CI/CD variable NPM_GITLAB_TOKEN (project or group deploy token with write_package_registry).
+#
+# Reference: https://docs.gitlab.com/ee/user/packages/npm_registry/
+
+stages:
+  - sync
+
+variables:
+  REGISTRY_PROJECT_ID: "${CI_PROJECT_ID}"
+  APPROVED_PACKAGES_FILE: "config/approved-npm-packages.txt"
+
+sync-npm:
+  stage: sync
+  image: node:20-slim
+  before_script:
+    - npm config set registry https://registry.npmjs.org/
+    - mkdir -p ./packages
+  script:
+    - echo "=== Downloading approved npm packages ==="
+    - |
+      while IFS= read -r line || [ -n "$line" ]; do
+        line=$(echo "$line" | sed 's/#.*//' | xargs)
+        [ -z "$line" ] && continue
+
+        echo "Packing: $line"
+        npm pack "$line" --pack-destination ./packages/ \
+          || echo "WARNING: Failed to pack $line"
+      done < "$APPROVED_PACKAGES_FILE"
+    - echo "=== Downloaded tarballs ==="
+    - ls -lh ./packages/ || echo "No packages downloaded"
+    - |
+      if [ -z "$(ls -A ./packages/ 2>/dev/null)" ]; then
+        echo "No packages to upload. Exiting."
+        exit 0
+      fi
+    - echo "=== Publishing to GitLab npm Registry ==="
+    - |
+      # Configure authentication for GitLab
+      echo "//${CI_SERVER_HOST}/api/v4/projects/${REGISTRY_PROJECT_ID}/packages/npm/:_authToken=${CI_JOB_TOKEN}" >> .npmrc
+      for tarball in ./packages/*.tgz; do
+        echo "Publishing: $tarball"
+        npm publish "$tarball" \
+          --registry="https://${CI_SERVER_HOST}/api/v4/projects/${REGISTRY_PROJECT_ID}/packages/npm/" \
+          || echo "WARNING: Failed to publish $tarball (may already exist)"
+      done
+  artifacts:
+    paths:
+      - packages/
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"

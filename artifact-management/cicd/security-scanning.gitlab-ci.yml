@@ -1,0 +1,263 @@
+# security-scanning.gitlab-ci.yml
+#
+# Security scanning pipeline for dependency checking, container scanning,
+# SAST, secret detection, and package allowlist enforcement.
+#
+# Designed to work on GitLab Free tier using open-source tools.
+# For GitLab Ultimate users, replace with native GitLab scanners where noted.
+#
+# Usage:
+#   include:
+#     - project: 'my-org/cicd-templates'
+#       file: '/cicd/security-scanning.gitlab-ci.yml'
+#
+# References:
+#   - https://docs.gitlab.com/ee/user/application_security/
+#   - https://trivy.dev/
+#   - https://safetycli.com/
+#   - https://semgrep.dev/
+
+stages:
+  - scan-dependencies
+  - scan-container
+  - scan-code
+  - enforce-policy
+
+# ──────────────────────────────────────────────────
+# Python Dependency Scanning
+# ──────────────────────────────────────────────────
+
+python-safety-check:
+  stage: scan-dependencies
+  image: python:3.12-slim
+  script:
+    - pip install --quiet safety pip-audit
+    - echo "=== Running Safety check (PyPI advisory database) ==="
+    - |
+      if [ -f requirements.txt ]; then
+        safety check -r requirements.txt --output json > safety-report.json || true
+        safety check -r requirements.txt --output text || true
+      fi
+    - echo "=== Running pip-audit (OSV database) ==="
+    - |
+      if [ -f requirements.txt ]; then
+        pip-audit -r requirements.txt --format json --output pip-audit-report.json || true
+        pip-audit -r requirements.txt || true
+      fi
+  artifacts:
+    paths:
+      - safety-report.json
+      - pip-audit-report.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - exists:
+        - requirements.txt
+        - requirements/*.txt
+        - pyproject.toml
+
+# ──────────────────────────────────────────────────
+# npm Dependency Scanning
+# ──────────────────────────────────────────────────
+
+npm-audit:
+  stage: scan-dependencies
+  image: node:20-slim
+  script:
+    - echo "=== Running npm audit ==="
+    - npm ci --ignore-scripts  # Install without running scripts (security measure)
+    - npm audit --json > npm-audit-report.json || true
+    - npm audit --audit-level=high || true
+  artifacts:
+    paths:
+      - npm-audit-report.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - exists:
+        - package.json
+        - package-lock.json
+
+# ──────────────────────────────────────────────────
+# Container Scanning (Trivy)
+# ──────────────────────────────────────────────────
+
+# For GitLab Ultimate users, replace with:
+# https://docs.gitlab.com/ee/user/application_security/container_scanning/
+container-scan-trivy:
+  stage: scan-container
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  variables:
+    IMAGE_TO_SCAN: "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+  script:
+    - echo "=== Scanning container image: ${IMAGE_TO_SCAN} ==="
+    - |
+      trivy image \
+        --severity HIGH,CRITICAL \
+        --format json \
+        --output trivy-container-report.json \
+        "${IMAGE_TO_SCAN}" || true
+    - |
+      trivy image \
+        --severity HIGH,CRITICAL \
+        --format table \
+        "${IMAGE_TO_SCAN}" || true
+    - echo "=== Generating SBOM ==="
+    - |
+      trivy image \
+        --format cyclonedx \
+        --output container-sbom.json \
+        "${IMAGE_TO_SCAN}"
+  artifacts:
+    paths:
+      - trivy-container-report.json
+      - container-sbom.json
+    reports:
+      cyclonedx:
+        - container-sbom.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - exists:
+        - Dockerfile
+  allow_failure: true
+
+# ──────────────────────────────────────────────────
+# SAST (Semgrep - open-source)
+# ──────────────────────────────────────────────────
+
+# For GitLab Ultimate users, replace with:
+# https://docs.gitlab.com/ee/user/application_security/sast/
+sast-semgrep:
+  stage: scan-code
+  image: returntocorp/semgrep:latest
+  variables:
+    # Use the default rulesets for Python, JavaScript, TypeScript
+    SEMGREP_RULES: "p/python p/javascript p/typescript p/docker p/secrets"
+  script:
+    - echo "=== Running Semgrep SAST scan ==="
+    - |
+      semgrep scan \
+        --config "${SEMGREP_RULES}" \
+        --json \
+        --output semgrep-report.json \
+        . || true
+    - |
+      semgrep scan \
+        --config "${SEMGREP_RULES}" \
+        . || true
+  artifacts:
+    paths:
+      - semgrep-report.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ──────────────────────────────────────────────────
+# Secret Detection (gitleaks)
+# ──────────────────────────────────────────────────
+
+# For GitLab Ultimate users, replace with:
+# https://docs.gitlab.com/ee/user/application_security/secret_detection/
+secret-detection:
+  stage: scan-code
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  script:
+    - echo "=== Scanning for leaked secrets ==="
+    - |
+      gitleaks detect \
+        --source . \
+        --report-format json \
+        --report-path gitleaks-report.json \
+        --verbose \
+        || true
+  artifacts:
+    paths:
+      - gitleaks-report.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ──────────────────────────────────────────────────
+# Package Allowlist Enforcement
+# ──────────────────────────────────────────────────
+
+check-python-allowlist:
+  stage: enforce-policy
+  image: python:3.12-slim
+  variables:
+    ALLOWLIST_FILE: "config/approved-pypi-packages.txt"
+  script:
+    - echo "=== Checking Python packages against allowlist ==="
+    - |
+      if [ ! -f "$ALLOWLIST_FILE" ]; then
+        echo "WARNING: No allowlist file found at $ALLOWLIST_FILE. Skipping."
+        exit 0
+      fi
+    - pip install -r requirements.txt --quiet 2>/dev/null || true
+    - |
+      VIOLATIONS=0
+      pip freeze | while IFS= read -r installed; do
+        pkg_name=$(echo "$installed" | cut -d'=' -f1 | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+        if ! grep -qi "^${pkg_name}$" "$ALLOWLIST_FILE" && \
+           ! grep -qi "^${pkg_name}[=><!]" "$ALLOWLIST_FILE"; then
+          echo "VIOLATION: $pkg_name is not in the approved package list"
+          VIOLATIONS=$((VIOLATIONS + 1))
+        fi
+      done
+      if [ "$VIOLATIONS" -gt 0 ]; then
+        echo "=== $VIOLATIONS unapproved package(s) detected ==="
+        echo "Add approved packages to $ALLOWLIST_FILE or remove the dependency."
+        exit 1
+      fi
+      echo "=== All packages are approved ==="
+  rules:
+    - exists:
+        - requirements.txt
+  allow_failure: true  # Set to false to enforce strictly
+
+check-npm-allowlist:
+  stage: enforce-policy
+  image: node:20-slim
+  variables:
+    ALLOWLIST_FILE: "config/approved-npm-packages.txt"
+  script:
+    - echo "=== Checking npm packages against allowlist ==="
+    - |
+      if [ ! -f "$ALLOWLIST_FILE" ]; then
+        echo "WARNING: No allowlist file found at $ALLOWLIST_FILE. Skipping."
+        exit 0
+      fi
+    - npm ci --ignore-scripts --quiet 2>/dev/null || true
+    - |
+      VIOLATIONS=0
+      npm ls --all --json 2>/dev/null | \
+        node -e "
+          const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+          const deps = new Set();
+          function walk(d) { if(d.dependencies) Object.keys(d.dependencies).forEach(k => { deps.add(k); walk(d.dependencies[k]); }); }
+          walk(data);
+          deps.forEach(d => console.log(d));
+        " | while IFS= read -r pkg; do
+          if ! grep -qi "^${pkg}$" "$ALLOWLIST_FILE"; then
+            echo "VIOLATION: $pkg is not in the approved package list"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+        done
+      if [ "$VIOLATIONS" -gt 0 ]; then
+        echo "=== Unapproved package(s) detected ==="
+        exit 1
+      fi
+      echo "=== All packages are approved ==="
+  rules:
+    - exists:
+        - package.json
+  allow_failure: true

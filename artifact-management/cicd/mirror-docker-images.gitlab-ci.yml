@@ -1,0 +1,111 @@
+# mirror-docker-images.gitlab-ci.yml
+#
+# Mirror external Docker images from public registries (Docker Hub, GHCR,
+# Quay, ECR Public) into your GitLab Container Registry.
+#
+# Use this for images NOT available through GitLab's Dependency Proxy
+# (which only supports Docker Hub). Also useful for pinning specific
+# digests of critical base images.
+#
+# Setup:
+#   1. Add to a dedicated "image-mirror" project.
+#   2. Define images to mirror in the IMAGES variable (or an external file).
+#   3. Create a pipeline schedule for periodic re-sync.
+#
+# Reference: https://docs.gitlab.com/ee/user/packages/container_registry/
+
+stages:
+  - mirror
+
+variables:
+  # Target registry path in GitLab
+  TARGET_REGISTRY: "${CI_REGISTRY_IMAGE}/mirrors"
+
+mirror-images:
+  stage: mirror
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo "${CI_JOB_TOKEN}" | docker login ${CI_REGISTRY} -u gitlab-ci-token --password-stdin
+  script:
+    - echo "=== Mirroring external Docker images ==="
+    - |
+      # Define images to mirror (source -> target tag)
+      # Format: SOURCE_IMAGE|TARGET_NAME
+      # Add or remove images as needed.
+      IMAGES="
+        python:3.12-slim|python-3.12-slim
+        python:3.11-slim|python-3.11-slim
+        node:20-slim|node-20-slim
+        node:18-slim|node-18-slim
+        nginx:1.25-alpine|nginx-1.25-alpine
+        redis:7-alpine|redis-7-alpine
+        postgres:16-alpine|postgres-16-alpine
+        ghcr.io/astral-sh/uv:latest|uv-latest
+      "
+
+      for entry in $IMAGES; do
+        [ -z "$entry" ] && continue
+
+        SOURCE=$(echo "$entry" | cut -d'|' -f1)
+        TARGET_TAG=$(echo "$entry" | cut -d'|' -f2)
+
+        echo "--- Mirroring: $SOURCE -> ${TARGET_REGISTRY}/${TARGET_TAG} ---"
+
+        docker pull "$SOURCE" || { echo "WARNING: Failed to pull $SOURCE"; continue; }
+
+        # Get the digest for traceability
+        DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$SOURCE" 2>/dev/null || echo "unknown")
+        echo "  Source digest: $DIGEST"
+
+        docker tag "$SOURCE" "${TARGET_REGISTRY}/${TARGET_TAG}"
+        docker push "${TARGET_REGISTRY}/${TARGET_TAG}" || { echo "WARNING: Failed to push ${TARGET_TAG}"; continue; }
+
+        echo "  Mirrored successfully."
+      done
+    - echo "=== Mirror complete ==="
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# Optional: Scan all mirrored images after sync
+scan-mirrored:
+  stage: mirror
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  needs: ["mirror-images"]
+  script:
+    - echo "=== Scanning mirrored images ==="
+    - |
+      IMAGES="
+        python-3.12-slim
+        python-3.11-slim
+        node-20-slim
+        node-18-slim
+        nginx-1.25-alpine
+        redis-7-alpine
+        postgres-16-alpine
+      "
+
+      FAILURES=0
+      for tag in $IMAGES; do
+        [ -z "$tag" ] && continue
+        echo "--- Scanning: ${TARGET_REGISTRY}/${tag} ---"
+        trivy image \
+          --severity HIGH,CRITICAL \
+          --exit-code 0 \
+          --format table \
+          "${TARGET_REGISTRY}/${tag}" \
+          || FAILURES=$((FAILURES + 1))
+      done
+
+      echo "=== Scan complete. Failures: $FAILURES ==="
+      # Report but don't fail, as mirrored images may have known vulnerabilities
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"

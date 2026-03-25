@@ -1,0 +1,53 @@
+# pyproject.toml - Example project configuration for uv / pip
+#
+# This shows how to configure a Python project to use your internal
+# registries (devpi + GitLab) for both public and private packages.
+#
+# Reference:
+#   - https://docs.astral.sh/uv/configuration/
+#   - https://packaging.python.org/en/latest/specifications/pyproject-toml/
+
+[project]
+name = "myorg-example-service"
+version = "1.0.0"
+description = "Example service using internal package registries"
+requires-python = ">=3.11"
+dependencies = [
+    # Public packages (resolved via devpi -> PyPI)
+    "flask>=3.0,<4.0",
+    "requests>=2.31,<3.0",
+    "pydantic>=2.0,<3.0",
+
+    # Private packages (resolved via GitLab Package Registry)
+    "myorg-auth>=1.0,<2.0",
+    "myorg-logging>=0.5,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+
+# ──────────────────────────────────────────────────
+# uv configuration
+# ──────────────────────────────────────────────────
+
+[tool.uv]
+# Primary index: devpi (caches public PyPI packages)
+index-url = "http://devpi.internal:3141/root/pypi/+simple/"
+
+# Secondary index: GitLab Package Registry (private packages)
+# Replace <GROUP_ID> with your GitLab group ID.
+extra-index-url = [
+    "https://gitlab.example.com/api/v4/groups/<GROUP_ID>/-/packages/pypi/simple",
+]
+
+# ──────────────────────────────────────────────────
+# Build system
+# ──────────────────────────────────────────────────
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

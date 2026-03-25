@@ -1,0 +1,37 @@
+# pip.conf - Client-side pip configuration
+#
+# Install location:
+#   Linux/macOS: ~/.config/pip/pip.conf
+#   Windows:     %APPDATA%\pip\pip.ini
+#   Per-project: <project-root>/pip.conf (use with --config-file)
+#
+# This configuration routes all PyPI requests through devpi (caching proxy)
+# and falls back to the GitLab Package Registry for private packages.
+#
+# Prerequisites:
+#   - devpi running at devpi.internal:3141
+#   - GitLab credentials in ~/.netrc (see setup-client.sh)
+#
+# Reference: https://pip.pypa.io/en/stable/topics/configuration/
+
+[global]
+# Primary index: devpi caching proxy (caches upstream PyPI automatically)
+index-url = http://devpi.internal:3141/root/pypi/+simple/
+
+# Secondary index: GitLab Package Registry (private packages)
+# Replace <GROUP_ID> with your GitLab group ID.
+extra-index-url = https://gitlab.example.com/api/v4/groups/<GROUP_ID>/-/packages/pypi/simple
+
+# Trust the devpi host (if not using HTTPS internally)
+trusted-host = devpi.internal
+
+# Require hash verification for production installs (uncomment for strict mode)
+# require-hashes = true
+
+# Connection timeout (seconds)
+timeout = 60
+
+[install]
+# Only install from the configured indices, never fall back to pypi.org directly
+# (This is enforced by routing through devpi, which handles upstream access)
+no-cache-dir = false

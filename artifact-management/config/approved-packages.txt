@@ -1,0 +1,57 @@
+# Approved Python Packages (PyPI)
+#
+# One package name per line, lowercase. Lines starting with # are comments.
+# This list is enforced by the allowlist check in security-scanning.gitlab-ci.yml.
+#
+# Process for adding a new package:
+#   1. Submit a merge request adding the package name to this file.
+#   2. Security team reviews the package (license, maintainers, vulnerability history).
+#   3. After approval and merge, the package is available for use.
+
+# Web frameworks
+flask
+django
+fastapi
+uvicorn
+gunicorn
+
+# HTTP clients
+requests
+httpx
+urllib3
+
+# Data validation
+pydantic
+marshmallow
+
+# Database
+sqlalchemy
+psycopg2-binary
+redis
+
+# Serialization
+orjson
+
+# Utilities
+python-dotenv
+click
+
+# Testing
+pytest
+pytest-cov
+pytest-asyncio
+coverage
+
+# Type checking and linting
+mypy
+ruff
+
+# Build and publish
+build
+twine
+hatchling
+
+# Security scanning
+safety
+pip-audit
+cyclonedx-bom

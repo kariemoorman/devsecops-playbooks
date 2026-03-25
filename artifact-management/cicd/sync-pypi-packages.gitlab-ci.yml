@@ -1,0 +1,92 @@
+# sync-pypi-packages.gitlab-ci.yml
+#
+# Scheduled pipeline to download approved PyPI packages and publish them
+# to the GitLab Package Registry. Use this as a backup sync mechanism
+# alongside devpi caching.
+#
+# Setup:
+#   1. Add this file to a dedicated "registry-sync" project in GitLab.
+#   2. Create a pipeline schedule: Build > Pipeline schedules > New schedule.
+#   3. Recommended frequency: daily for active projects, weekly otherwise.
+#   4. Maintain the approved package list in config/approved-packages.txt.
+#
+# Reference: https://docs.gitlab.com/ee/user/packages/pypi_repository/
+
+stages:
+  - sync
+  - verify
+
+variables:
+  # Target project for the GitLab Package Registry
+  REGISTRY_PROJECT_ID: "${CI_PROJECT_ID}"
+  # Path to the approved packages file (one package per line, with optional version pins)
+  APPROVED_PACKAGES_FILE: "config/approved-pypi-packages.txt"
+  # Upstream PyPI index
+  UPSTREAM_INDEX: "https://pypi.org/simple"
+
+sync-pypi:
+  stage: sync
+  image: python:3.12-slim
+  before_script:
+    - pip install --quiet twine
+    - mkdir -p ./packages
+  script:
+    - echo "=== Downloading approved packages from upstream PyPI ==="
+    - |
+      while IFS= read -r line || [ -n "$line" ]; do
+        # Skip comments and blank lines
+        line=$(echo "$line" | sed 's/#.*//' | xargs)
+        [ -z "$line" ] && continue
+
+        echo "Downloading: $line"
+        pip download "$line" \
+          --no-deps \
+          --dest ./packages/ \
+          --index-url "$UPSTREAM_INDEX" \
+          || echo "WARNING: Failed to download $line"
+      done < "$APPROVED_PACKAGES_FILE"
+    - echo "=== Downloaded packages ==="
+    - ls -lh ./packages/ || echo "No packages downloaded"
+    - |
+      if [ -z "$(ls -A ./packages/ 2>/dev/null)" ]; then
+        echo "No packages to upload. Exiting."
+        exit 0
+      fi
+    - echo "=== Uploading to GitLab Package Registry ==="
+    - |
+      twine upload \
+        --repository-url "${CI_API_V4_URL}/projects/${REGISTRY_PROJECT_ID}/packages/pypi" \
+        -u gitlab-ci-token \
+        -p "${CI_JOB_TOKEN}" \
+        --skip-existing \
+        ./packages/*
+  artifacts:
+    paths:
+      - packages/
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"  # Allow manual trigger
+
+verify-sync:
+  stage: verify
+  image: python:3.12-slim
+  needs: ["sync-pypi"]
+  script:
+    - echo "=== Verifying packages are accessible from GitLab registry ==="
+    - |
+      while IFS= read -r line || [ -n "$line" ]; do
+        line=$(echo "$line" | sed 's/#.*//' | xargs)
+        [ -z "$line" ] && continue
+
+        pkg_name=$(echo "$line" | cut -d'=' -f1 | cut -d'>' -f1 | cut -d'<' -f1 | xargs)
+        echo "Checking: $pkg_name"
+        pip install --dry-run "$pkg_name" \
+          --index-url "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/api/v4/projects/${REGISTRY_PROJECT_ID}/packages/pypi/simple" \
+          --quiet \
+          && echo "  OK: $pkg_name available" \
+          || echo "  MISSING: $pkg_name not found in registry"
+      done < "$APPROVED_PACKAGES_FILE"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
