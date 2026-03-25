@@ -1,0 +1,69 @@
+# Verdaccio configuration
+#
+# npm caching proxy that sits between developers/CI and the public npm registry.
+# Caches packages on first request and serves from cache on subsequent requests.
+#
+# Reference: https://verdaccio.org/docs/configuration
+
+# Where packages are stored on disk
+storage: /verdaccio/storage/data
+
+# Plugin directory
+plugins: /verdaccio/plugins
+
+# Web UI configuration
+web:
+  title: "Internal npm Registry"
+  # Disable gravatar for privacy
+  gravatar: false
+
+# Authentication
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    # Set to -1 to disable self-registration in production
+    max_users: -1
+
+# Upstream registries
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 30s
+    maxage: 10m
+    max_fails: 3
+    fail_timeout: 5m
+    # Cache aggressively
+    cache: true
+
+# Package access rules
+packages:
+  # Scoped private packages (@myorg/*) -- do NOT proxy to upstream
+  # These are served from local storage only.
+  # Adjust the scope to match your organization.
+  "@myorg/*":
+    access: $authenticated
+    publish: $authenticated
+    unpublish: $authenticated
+    # No proxy -- private packages are never fetched from upstream
+
+  # All other packages -- proxy through to npmjs with caching
+  "**":
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: npmjs
+
+# Server configuration
+server:
+  keepAliveTimeout: 60
+
+# Rate limiting
+middlewares:
+  audit:
+    enabled: true
+
+# Logging
+logs:
+  type: stdout
+  format: pretty
+  level: warn

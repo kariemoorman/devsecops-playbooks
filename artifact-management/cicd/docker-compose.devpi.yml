@@ -1,0 +1,79 @@
+# docker-compose.devpi.yml
+#
+# Deploy devpi (PyPI caching proxy) and Verdaccio (npm caching proxy)
+# as long-running services alongside your GitLab instance.
+#
+# Usage:
+#   docker compose -f cicd/docker-compose.devpi.yml up -d
+#
+# Services:
+#   - devpi:     http://localhost:3141  (PyPI proxy/cache)
+#   - verdaccio: http://localhost:4873  (npm proxy/cache)
+#
+# References:
+#   - https://devpi.net/docs/devpi/devpi/stable/
+#   - https://verdaccio.org/docs/what-is-verdaccio
+
+services:
+  # ──────────────────────────────────────────────────
+  # devpi - PyPI caching proxy
+  # ──────────────────────────────────────────────────
+  devpi:
+    image: devpi/devpi-server:latest
+    container_name: devpi
+    restart: unless-stopped
+    ports:
+      - "3141:3141"
+    volumes:
+      - devpi-data:/data
+    environment:
+      # devpi-server options
+      DEVPI_HOST: "0.0.0.0"
+      DEVPI_PORT: "3141"
+    command: >
+      devpi-server
+        --host 0.0.0.0
+        --port 3141
+        --restrict-modify root
+        --request-timeout 60
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3141/+api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ──────────────────────────────────────────────────
+  # Verdaccio - npm caching proxy
+  # ──────────────────────────────────────────────────
+  verdaccio:
+    image: verdaccio/verdaccio:5
+    container_name: verdaccio
+    restart: unless-stopped
+    ports:
+      - "4873:4873"
+    volumes:
+      - verdaccio-data:/verdaccio/storage
+      - ./config/verdaccio/config.yaml:/verdaccio/conf/config.yaml:ro
+    environment:
+      VERDACCIO_PORT: "4873"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4873/-/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  devpi-data:
+    driver: local
+  verdaccio-data:
+    driver: local
