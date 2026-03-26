@@ -2,7 +2,7 @@
 # GitLab as a Package & Container Registry: A Procedural Guide
 
 
-This guide describes how to use Gitlab (both SAAS and self-hosted CE/EE) to stand up an artifact management solution that is cheap, easy to implement, and scalable.
+This guide explains how to use GitLab (both SaaS and self-hosted CE/EE) to build a cost-effective, easy-to-implement, and scalable artifact management solution.
 
 Initial scope includes Python (PyPI), Node.js (npm),and Docker/OCI images, with methods that can be extended to support additional formats (see [GitLab Packages & Registries](https://docs.gitlab.com/user/packages)).
 
