@@ -23,7 +23,7 @@ A practical guide to keeping your API keys, tokens, passwords, and credentials s
   - [AWS Secrets Manager / SSM Parameter Store](#aws-secrets-manager--ssm-parameter-store)
   - [GCP Secret Manager](#gcp-secret-manager)
   - [Azure Key Vault](#azure-key-vault)
-- [Best Practices](#best-practices)
+- [Best Practices](#general-best-practices)
 - [Appendix](#appendix)
 
 ---
@@ -100,7 +100,7 @@ Free and open source (BSD-3-Clause).
 
 age uses public-key cryptography. You generate a key pair, encrypt with the public key (the "recipient"), and decrypt with the private key (the "identity").
 
-#### Hands-On Tutorial
+#### Example
 
 **Install age:**
 
@@ -220,7 +220,7 @@ SOPS encrypts **values** but leaves **keys** in plaintext. This means:
 
 SOPS supports multiple key backends: age, PGP, AWS KMS, GCP KMS, Azure Key Vault, and HashiCorp Vault Transit.
 
-#### Hands-On Tutorial
+#### Example
 
 **Install SOPS:**
 
@@ -426,7 +426,7 @@ Free and open source (GPL-3.0).
 
 git-crypt uses git's filter and diff mechanisms. You define which files to encrypt via `.gitattributes`. Locally, files appear in plaintext. In the remote repo (and for anyone without the key), they're encrypted binary blobs.
 
-#### Hands-On Tutorial
+#### Example
 
 **Install git-crypt:**
 
@@ -570,7 +570,7 @@ Doppler is a managed secrets platform that centralizes your environment variable
 
 Doppler organizes secrets into **projects** and **environments** (dev, staging, prod). You access them via the CLI, SDK, or direct integrations.
 
-#### Hands-On Tutorial
+#### Example
 
 **Install the Doppler CLI:**
 
@@ -723,7 +723,7 @@ Infisical is an open-source secrets management platform. It provides a similar e
 └─────────────┘   fetches secrets         └──────────────┘
 ```
 
-#### Hands-On Tutorial
+#### Example
 
 **Self-host with Docker Compose (quickstart):**
 
@@ -860,7 +860,7 @@ If you're scaling into complex infrastructure with dynamic secrets (database cre
 
 The key concept is **secret references** — URIs like `op://vault-name/item-name/field-name` that resolve to actual values at runtime.
 
-#### Hands-On Tutorial
+#### Example
 
 **Install the `op` CLI:**
 
@@ -1011,7 +1011,7 @@ Vault is not just a key-value store. Its secrets engines can:
 - **PKI**: Issue TLS certificates
 - **AWS/GCP/Azure**: Generate cloud IAM credentials on demand
 
-#### Hands-On Tutorial
+#### Example
 
 **Install Vault:**
 
@@ -1235,13 +1235,13 @@ docker run -p 8200:8200 quay.io/openbao/openbao:latest server -dev
 
 #### Next Step
 
-If self-hosting isn't for you, look at **cloud-native** secrets managers from AWS, GCP, or Azure — fully managed, pay-as-you-go, and zero operational overhead.
+If self-hosting isn't for you, look at **cloud-native** secrets managers from AWS, GCP, or Azure: fully managed, pay-as-you-go, and zero operational overhead.
 
 ---
 
 ## Cloud-Native
 
-These services are tightly integrated with their respective cloud platforms. They're fully managed, require no infrastructure to operate, and scale automatically. Because cloud services change frequently, this section provides overviews and links to official documentation rather than step-by-step tutorials.
+These services are tightly integrated with their respective cloud platforms. They're fully managed, require no infrastructure to operate, and scale automatically. Because cloud services change frequently, this section provides overviews and links to official documentation rather than step-by-step examples.
 
 ### AWS Secrets Manager / SSM Parameter Store
 
@@ -1309,49 +1309,90 @@ Secrets should never sit in plaintext on disk, in databases, or in cloud storage
 - If using a secrets manager (Doppler, Infisical, Vault, OpenBao), ensure the backing storage is encrypted
 - For AI agent workflows, never pass plaintext secrets through logs, environment dumps, or unencrypted inter-process communication
 
-### 3. Use a Secret Scanner in CI
+### 3. Use a Secret Scanner in Git Hooks & CI
 
-Catch accidental commits before they reach your remote:
+#### Git Hooks
+
+Once a secret hits remote history, remediation is painful. You need to rotate the credential, rewrite git history (or accept the secret lives forever in your repo), and audit for potential exposure. Git hooks helps prevent this scenario by failing the operation before a secret is committed or pushed. Pre-commit and pre-push hooks serve different purposes and catch secrets at different points:
+
+**Pre-Commit**
+- Runs on git commit
+- Scans only staged files (fast)
+- Catches secrets before they enter local history
+- Immediate feedback — developer fixes before the commit exists
+
+**Pre-Push**
+- Runs on git push
+- Can scan commit range being pushed
+- Last gate before secrets reach the remote
+- Catches anything that slipped past pre-commit (direct commits, amended commits, rebases, --no-verify, Git GUIs that skip hooks)
+
+Both hooks together provide defense in depth: pre-commit blocks secrets from entering local history, pre-push blocks them from reaching the remote.
+
+See [git-secret-scan](https://github.com/kariemoorman/.dotfiles/tree/main/.git-templates) for instructions on how to define and integrate secrets scanning in pre-commit and pre-push hooks using TruffleHog and GitLeaks.
+
+
+#### CI
+
+CI scanning is your server-side guarantee that every pushed commit gets scanned regardless of local configuration. The goal is to catch accidental commits before they reach your remote. An example GitHub Actions secrets scanning workflow is provided below:
 
 ```yaml
-# GitHub Actions example with gitleaks
-- name: Scan for secrets
-  uses: gitleaks/gitleaks-action@v2
-  env: 
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+name: Secrets Scan
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Other scanners:
+Popular Secrets Scanners:
 - **gitleaks**: [https://github.com/gitleaks/gitleaks](https://github.com/gitleaks/gitleaks)
+- **betterleaks**: [https://github.com/betterleaks/betterleaks](https://github.com/betterleaks/betterleaks)
 - **truffleHog**: [https://github.com/trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog)
-- **detect-secrets** (Yelp): [https://github.com/Yelp/detect-secrets](https://github.com/Yelp/detect-secrets)
 
-### 4. Rotate Secrets Regularly
+### 4. AuthN/Z Solutions
+- Prefer identity (OIDC) over static credentials (PATs)
+- If PATs are unavoidable,constrain them aggressively
+- When issuing PATs Github, prefer classic PATs over fine-grained PATs, as classic PAT scopes are immutable after creation
+- Treat fine-grained PATs as **mutable risk objects**, not static secrets; their permissions can be modified **without changing the token value**
 
-- Set calendar reminders or automated rotation policies
-- Use dynamic secrets (Vault, Infisical) when possible — they auto-expire
+### 5. Rotate Secrets Regularly
+
+- Use dynamic secrets when possible
+- Automate secret rotation policies (e.g., automatic expiration, automatic re-issuance per job/run)
 - When a team member leaves, rotate every secret they had access to
 
-### 5. Principle of Least Privilege
+### 6. Principle of Least Privilege
 
 - Each application, service, or agent should only have access to the secrets it needs
-- Use scoped tokens and policies (Vault AppRole, Infisical machine identities)
+- Use strictly scoped tokens and policies: Restrict tokens to specific repositories/workflows/events to reduce usefulness
 - Prefer short-lived tokens over long-lived API keys
+- If PATs are required, 
 
-### 6. Separate Secrets by Environment
+### 7. Separate Secrets by Environment
 
-- Never use production credentials in development
 - Use different keys/tokens for dev, staging, and production
-- Tools like Doppler and Infisical make this a first-class feature
+- Never use production credentials in development
 
-### 7. Audit Access
+### 8. Audit Access
 
 - Enable audit logging wherever possible
-- Know who accessed what secret and when
-- Vault, Doppler, and Infisical all provide audit logs
-- For file-based tools (SOPS, age), git history serves as a basic audit trail
+- Set up alerts on permission changes
+- Enforce re-validation of least privilege assumptions
 
-### 8. Plan for Offboarding
+### 9. Plan for Offboarding
 
 When someone leaves your team:
 - Revoke their access tokens immediately
