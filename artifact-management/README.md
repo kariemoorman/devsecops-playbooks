@@ -67,7 +67,7 @@ Modern software depends on thousands of external packages. Every `pip install`, 
 ![Architecture Diagram](../assets/architecture-diagram.svg)
 
 
-**Key design decisions:**
+**Key Design Elements:**
 
 - **GitLab Package Registry** hosts **private** packages (your internal libraries).
 - **Caching proxies** (devpi, Verdaccio) sit in front of **public** upstream registries and transparently cache on first request.
